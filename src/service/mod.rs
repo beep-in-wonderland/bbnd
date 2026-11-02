@@ -41,12 +41,23 @@ impl ThreadHandle<Result<(),errors::Error>> {
 }
 
 
+/// The Service struct contains the environment paths for the program and the 
+/// runtime config (wesad.conf). As well, it contains a wrapper for the sqlite
+/// databse, which is futher wrapped by a Mutex and Arc for sharing across
+/// threads.
+/// 
+/// `paths` and `runtime_config` are computed only once on startup. Cloning them
+/// provides no worry of stale data.
+/// 
+/// As such, the running `service` instance will be cloned into both the
+/// `listener` and `updater` threads so as to have an easy entrypoint into
+/// some maintenance functions, such as `reload_configs(&self)`.
+#[derive(Clone)]
 pub struct Service {
     paths : io::ProgramPaths,
     session : Arc<Mutex<database::Session>>,
     runtime_config: io::RuntimeConfig,
 }
-
 
 impl Service {
 
@@ -96,16 +107,25 @@ impl Service {
     }
 
 
+    pub fn reload_configs(&self) -> Result<(), errors::Error>
+    {
+        if let Err(e) = self.parse_all_webhook_configs() {
+            error!("Error occurred reading webhook configs. Consider investigating and restarting the daemon: {e}");
+        };
+
+        Ok(())
+    }
+
     fn get_runtime_threads(&self) -> Result<(ThreadHandle<Result<(),errors::Error>>, ThreadHandle<Result<(),errors::Error>>), errors::Error>
     {   
         // Spawns a thread to continuously update webhooks with current database values
         let updater_handle = updater::run(
-            Arc::clone(&self.session))
+            self.clone())
             .expect("Program does nothing if this fails");
 
         // Spawns a thread to continuously listen for & execute database updates
         let listener_handle = listener::run(
-            Arc::clone(&self.session), &self.runtime_config)
+            self.clone())
             .expect("Program does nothing if this fails");
 
         Ok((updater_handle, listener_handle))
@@ -155,14 +175,10 @@ impl Service {
     }
 
 
-    fn parse_all_webhook_configs(&mut self) -> Result<(), errors::Error> {
+    fn parse_all_webhook_configs(&self) -> Result<(), errors::Error> {
         log::debug!("Starting webhook parse");
-        dbg!(self.paths.get_etc());
-        dbg!(self.paths.get_persist());
-        dbg!(self.paths.get_log());
 
         let webhooks_dir = &self.paths.get_etc().join(io::ETC_PATH_WEBHOOKS);
-        dbg!(&webhooks_dir);
         let webhooks = read_dir(webhooks_dir)?;
         let mut webhook_path: PathBuf;
 
@@ -177,7 +193,6 @@ impl Service {
 
         for webhook in webhooks {
             webhook_path = webhook.unwrap().path();
-            dbg!(&webhook_path);
 
             let target_string = webhook_path.display().to_string();
             captures = regex_conf.captures(&target_string)?;

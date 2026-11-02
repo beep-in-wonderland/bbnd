@@ -9,12 +9,12 @@ const URI_FLAGS_WAIT: &str = "wait=true";
 const MIN_WAIT_TIME: i64 = 1000; // In milliseconds
 
 /// Spawns a thread which continuously updates status type webhooks with session db values
-pub fn run(guard: Arc<Mutex<Session>>) -> Result<service::ThreadHandle<Result<(), errors::Error>>, errors::Error> {
+pub fn run(service: service::Service) -> Result<service::ThreadHandle<Result<(), errors::Error>>, errors::Error> {
     
     Ok(
         service::ThreadHandle::Updater(
             thread::spawn(move || {
-                update_loop(guard)
+                update_loop(service)
             })
         )
     )
@@ -29,7 +29,7 @@ pub fn run(guard: Arc<Mutex<Session>>) -> Result<service::ThreadHandle<Result<()
 ///     2. Send due webhook updates, and update the `last` field for each status.
 ///     3. Keep track of the shortest time until the *next* scheduled webhook execution.
 ///     4. Once all webhooks are iterated, sleep until the next scheduled webhook.
-fn update_loop(guard: Arc<Mutex<Session>>) -> Result<(), errors::Error> {
+fn update_loop(service: service::Service) -> Result<(), errors::Error> {
 
     let mut sleep_target_timestamp;
     let mut next_millis: i64;
@@ -42,6 +42,7 @@ fn update_loop(guard: Arc<Mutex<Session>>) -> Result<(), errors::Error> {
     loop {
         debug!("Starting updater loop iteration");
 
+        let guard = &service.session;
         let session = guard.lock().expect("Mutex poisoned in updater update_loop. Exiting thread.");
         let webhooks = database::read::webhook_statuses(&session)
             .expect("Fatal: The database cannot be read.");
