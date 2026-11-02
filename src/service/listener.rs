@@ -52,15 +52,13 @@ impl TagValue {
 }
 
 
-pub(super) fn run(guard: Arc<Mutex<database::Session>>, runtime_config: &io::RuntimeConfig) 
+pub(super) fn run(service: crate::service::Service) 
 -> Result<ThreadHandle<Result<(), errors::Error>>, errors::Error> {
-    
-    let target_ip = format!("{}:{}", runtime_config.listener_addr, runtime_config.listener_port);
     
     Ok(
         ThreadHandle::Listener(
             thread::spawn(move||{
-                listen_http(guard, target_ip)
+                listen_http(service)
             })
         )
     )
@@ -68,7 +66,7 @@ pub(super) fn run(guard: Arc<Mutex<database::Session>>, runtime_config: &io::Run
 
 
 
-fn listen_http(guard: Arc<Mutex<database::Session>>, target_ip: String) -> Result<(), errors::Error> {
+fn listen_http(service: crate::service::Service) -> Result<(), errors::Error> {
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -78,7 +76,7 @@ fn listen_http(guard: Arc<Mutex<database::Session>>, target_ip: String) -> Resul
     loop {
 
         // Continuously try and listen on the provided address.
-        if let Err(e) = rt.block_on(build_listener(&guard, &target_ip)) {
+        if let Err(e) = rt.block_on(build_listener(&service)) {
             error!("HTTP listener failed: {e}");
         }
 
@@ -91,12 +89,28 @@ fn listen_http(guard: Arc<Mutex<database::Session>>, target_ip: String) -> Resul
 }
 
 
-async fn build_listener(guard: &Arc<Mutex<database::Session>>, target_ip: &String) -> Result<(), errors::Error> {
+async fn build_listener(service: &Service) -> Result<(), errors::Error> {
+
+    let guard = &service.session;
+    let target_ip = format!("{}:{}",
+        &service.runtime_config.listener_addr,
+        &service.runtime_config.listener_port
+    );
 
     let app: axum::Router = axum::Router::new()
-        .route("/status", post(status_handler))
-        .route("/health", get(health_check))
-        .with_state(guard.clone());
+
+        // POST paths
+        //              /status - Tag updates
+        .route("/status", post(post_status))
+        .with_state(guard.clone())
+
+        //              /reload - Reload `webhooks.d` configs
+        .route("/reload", post(post_reload))
+        .with_state(service.clone())
+
+        // GET paths
+        //              /health - Simple health check
+        .route("/health", get(get_health));
 
     let listener = tokio::net::TcpListener::bind(target_ip).await?;
     axum::serve(listener, app).await?;
@@ -105,12 +119,13 @@ async fn build_listener(guard: &Arc<Mutex<database::Session>>, target_ip: &Strin
 }
 
 
-/// --------------------------------- Endpoint functions
+// --------------------------------- Endpoint functions
 
-async fn status_handler(
+async fn post_status(
     State(guard): State<Arc<Mutex<database::Session>>>, 
     Json(payload): Json<StatusUpdate>
-) -> StatusCode {
+) -> StatusCode 
+{
 
     info!("POST received to HTTP listener for webhook: {}", &payload.webhook);
 
@@ -138,7 +153,24 @@ async fn status_handler(
 
 }
 
-async fn health_check() -> StatusCode {
+
+async fn post_reload(
+    State(service): State<service::Service>
+    ) -> StatusCode
+{   
+    info!("Config reload requested. Processing...");
+    
+    if let Err(e) = service.reload_configs() {
+        error!("Error reloading configs: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR
+    }
+
+    StatusCode::OK
+}
+
+
+async fn get_health() -> StatusCode 
+{
     info!("Health check received");
     StatusCode::OK
 }
