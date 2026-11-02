@@ -7,15 +7,13 @@ edition = "2024"
 axum = "0.8.9"
 chrono = "0.4.45"
 daemonize = "0.5.0"
-dbus = "0.9.12"
 directories = "6.0.0"
-fancy-regex = "0.19.2"
+fancy-regex = "0.20.0"
 fern = "0.7.1"
 json = "0.12.4"
 log = "0.4.34"
-mail-send = "0.6.2"
 reqwest = {version = "0.13.5", features=["blocking"]}
-serde = "1.0.229"
+serde = {version = "1.0.229", features=["derive"]}
 sqlite = "0.37.4"
 thiserror = "2.0.21"
-tokio = "1.53.2"
+tokio = {version = "1.53.2", features = ["rt", "rt-multi-thread"]}
